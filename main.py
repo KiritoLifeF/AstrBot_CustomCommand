@@ -9,25 +9,38 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
-from data.plugins.astrbot_plugin_wbank.data import KeywordReplyDB
+from .data import KeywordReplyDB
+import requests
 
 
 @register(
-    name="astrbot_plugin_wbank",
+    name="astrbot_plugin_customEx",
     desc="动态词库，自定义回复词",
-    version="v1.0.3",
-    author="Zhalslar",
-    repo="https://github.com/Zhalslar/astrbot_plugin_wbank",
+    version="v1.0.0",
+    author="Varrge",
+    repo="https://github.com/KiritoLifeF/AstrBot_CustomCommand",
 )
-class WbankPlugin(Star):
+class customExPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        plugin_data_dir = StarTools.get_data_dir("astrbot_plugin_wbank")
-        self.word_bank_file = os.path.join(plugin_data_dir, "default_word_bank.json")
-        self.db = KeywordReplyDB(self.word_bank_file)
+        plugin_data_dir = StarTools.get_data_dir("astrbot_plugin_customEx")
+        self.word_customEx_file = os.path.join(plugin_data_dir, "default_word_customEx.json")
+        self.db = KeywordReplyDB(self.word_customEx_file)
         self.words_limit = config.get("words_limit", 10)
         self.delete_msg_time = config.get("delete_msg_time", 0)
         self.need_prefix = config.get("need_prefix", True)
+
+    @filter.command("设置api令牌")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def set_api_token(self, event: AstrMessageEvent):
+        """设置 API 令牌 示例：设置api令牌 ptlc_xxx"""
+        token = event.message_str.removeprefix("设置api令牌").strip()
+        if not token:
+            await self.send(event, "格式错误，应为：设置api令牌 你的令牌")
+            return
+        # 将 token 保存到插件的 JSON 数据文件
+        self.db.add_entry("__api_token__", token)
+        await self.send(event, "API 令牌已更新")
 
     @filter.command("添加词条")
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -44,6 +57,43 @@ class WbankPlugin(Star):
         self.db.add_entry(keyword, content)
         self.db.enable_in_group(keyword, event.get_group_id())
         await self.send(event, f"已添加：{keyword} -> {content}")
+
+    @filter.command("添加api词条")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def add_api_entry(self, event: AstrMessageEvent):
+        """添加 API 词条并调用指定链接\n示例：添加api词条 关键词 https://example.com/api"""
+        # 解析参数：关键词 + API链接
+        args = event.message_str.removeprefix("添加api词条").strip().split(" ", 1)
+        if len(args) != 2:
+            await self.send(event, "格式错误，应为：添加api词条 关键词 链接")
+            return
+        keyword, api_url = args
+
+        # 数量校验
+        if len(self.db.list_entries(keyword)) >= self.words_limit:
+            await self.send(event, f"关键词【{keyword}】的词条数量已达上限")
+            return
+
+        # 保存词条（将链接作为内容存储）
+        self.db.add_entry(keyword, api_url)
+        self.db.enable_in_group(keyword, event.get_group_id())
+
+        # 立即调用该 API 链接（GET），并回显部分结果
+        try:
+            token_entries = self.db.list_entries("__api_token__")
+            api_token = token_entries[0] if token_entries else "ptlc_YOUR_API_KEY"
+            headers = {
+                'Authorization': f'Bearer {api_token}',
+                'Accept': 'Application/vnd.pterodactyl.v1+json',
+                'Content-Type': 'application/json'
+            }
+            response = requests.get(api_url, headers=headers)
+            if response.status_code == 200:
+                await self.send(event, f"API 调用成功：{response.text[:100]}...")
+            else:
+                await self.send(event, f"API 调用失败，状态码：{response.status_code}")
+        except Exception as e:
+            await self.send(event, f"调用 API 出错：{e}")
 
     @filter.command("删除词条")
     @filter.permission_type(filter.PermissionType.ADMIN)
