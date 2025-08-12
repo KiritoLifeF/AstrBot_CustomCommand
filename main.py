@@ -1,3 +1,4 @@
+from aiocqhttp import event
 from astrbot.api.all import *
 from astrbot.api.event.filter import command, permission_type, event_message_type, EventMessageType, PermissionType
 import json
@@ -314,39 +315,39 @@ class CustomCommandPlugin(Star):
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
         msg = event.message_str.strip().lower()
-        event.plain_result(f"[DEBUG] 收到消息: {msg}")
+        logger.info(f"[DEBUG] 收到消息: {msg}")
         # 白名单校验：仅当开启时才限制自动回复
         if self.whitelist_enabled:
-            event.plain_result(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
+            logger.info(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
             sid = self._get_sender_id(event)
-            event.plain_result(f"[DEBUG] 发送者ID: {sid}")
+            logger.info(f"[DEBUG] 发送者ID: {sid}")
             if sid is None or str(sid) not in self.whitelist:
-                event.plain_result(f"[DEBUG] 发送者不在白名单内，忽略消息")
+                logger.info(f"[DEBUG] 发送者不在白名单内，忽略消息")
                 # 不在白名单则直接忽略，不打扰用户
                 return
         v = self.command_map.get(msg)
-        event.plain_result(f"[DEBUG] 匹配到的关键词映射: {v}")
+        logger.info(f"[DEBUG] 匹配到的关键词映射: {v}")
         if v is None:
-            event.plain_result(f"[DEBUG] 尝试模糊匹配...")
+            logger.info(f"[DEBUG] 尝试模糊匹配...")
             # 模糊匹配文本回复（兼容旧逻辑）
             for keyword, reply in self.command_map.items():
                 if isinstance(reply, str) and keyword in msg:
-                    event.plain_result(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
+                    logger.info(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
                     yield event.plain_result(reply)
                     return
             return
 
         # 命中精确关键词，类型: {type(v)}
-        event.plain_result(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
+        logger.info(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
         if isinstance(v, dict):
             vtype = v.get("type")
             if vtype == "get_api":
-                event.plain_result(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("GET", v.get("endpoint", ""))
                 yield event.plain_result(out)
                 return
             if vtype == "post_api":
-                event.plain_result(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
                 yield event.plain_result(out)
                 return
@@ -356,7 +357,7 @@ class CustomCommandPlugin(Star):
 
         # 兼容旧版：纯文本回复
         if isinstance(v, str):
-            event.plain_result(f"[DEBUG] 返回纯文本回复: {v}")
+            logger.info(f"[DEBUG] 返回纯文本回复: {v}")
             yield event.plain_result(v)
             return
 
