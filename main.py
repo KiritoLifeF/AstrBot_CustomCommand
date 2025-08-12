@@ -1,4 +1,3 @@
-from aiocqhttp import event
 from astrbot.api.all import *
 from astrbot.api.event.filter import command, permission_type, event_message_type, EventMessageType, PermissionType
 import json
@@ -19,7 +18,7 @@ class CustomCommandPlugin(Star):
         self.config_path = os.path.join(plugin_data_dir, "custom_command_config.json")
         self.command_map = self._load_config()
         self.api_token = self._load_token()
-        event.plain_result(f"配置文件路径：{self.config_path}")
+        logger.debug(f"配置文件路径：{self.config_path}")
         # 白名单配置
         self.plugin_data_dir = os.path.join("data", "plugins", "astrbot_plugin_custom_command")
         self.whitelist_path = os.path.join(self.plugin_data_dir, "whitelist.json")
@@ -50,12 +49,12 @@ class CustomCommandPlugin(Star):
         token_path = os.path.join("data", "plugins", "astrbot_plugin_custom_command", "api_token.json")
         try:
             if not os.path.exists(token_path):
-                event.plain_result("API令牌文件不存在，返回空字符串")
+                logger.debug("API令牌文件不存在，返回空字符串")
                 return ""
             with open(token_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 token = data.get("token", "")
-                event.plain_result("API令牌加载成功")
+                logger.debug("API令牌加载成功")
                 return token
         except Exception as e:
             logger.error(f"API令牌加载失败: {str(e)}")
@@ -67,7 +66,7 @@ class CustomCommandPlugin(Star):
         try:
             with open(token_path, "w", encoding="utf-8") as f:
                 json.dump({"token": token}, f, ensure_ascii=False, indent=2)
-            event.plain_result("API令牌保存成功")
+            logger.debug("API令牌保存成功")
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
