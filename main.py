@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.6", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.7", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -322,39 +322,39 @@ class CustomCommandPlugin(Star):
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
         msg = event.message_str.strip().lower()
-        logger.info(f"[DEBUG] 收到消息: {msg}")
+        print(f"[DEBUG] 收到消息: {msg}")
         # 白名单校验：仅当开启时才限制自动回复
         if self.whitelist_enabled:
-            logger.info(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
+            print(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
             sid = self._get_sender_id(event)
-            logger.info(f"[DEBUG] 发送者ID: {sid}")
+            print(f"[DEBUG] 发送者ID: {sid}")
             if sid is None or str(sid) not in self.whitelist:
-                logger.info(f"[DEBUG] 发送者不在白名单内，忽略消息")
+                print(f"[DEBUG] 发送者不在白名单内，忽略消息")
                 # 不在白名单则直接忽略，不打扰用户
                 return
         v = self.command_map.get(msg)
-        logger.info(f"[DEBUG] 匹配到的关键词映射: {v}")
+        print(f"[DEBUG] 匹配到的关键词映射: {v}")
         if v is None:
-            logger.info(f"[DEBUG] 尝试模糊匹配...")
+            print(f"[DEBUG] 尝试模糊匹配...")
             # 模糊匹配文本回复（兼容旧逻辑）
             for keyword, reply in self.command_map.items():
                 if isinstance(reply, str) and keyword in msg:
-                    logger.info(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
+                    print(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
                     yield event.plain_result(reply)
                     return
             return
 
         # 命中精确关键词，类型: {type(v)}
-        logger.info(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
+        print(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
         if isinstance(v, dict):
             vtype = v.get("type")
             if vtype == "get_api":
-                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("GET", v.get("endpoint", ""))
                 yield event.plain_result(out)
                 return
             if vtype == "post_api":
-                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
                 yield event.plain_result(out)
                 return
@@ -364,7 +364,7 @@ class CustomCommandPlugin(Star):
 
         # 兼容旧版：纯文本回复
         if isinstance(v, str):
-            logger.info(f"[DEBUG] 返回纯文本回复: {v}")
+            print(f"[DEBUG] 返回纯文本回复: {v}")
             yield event.plain_result(v)
             return
 
