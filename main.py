@@ -100,24 +100,6 @@ class CustomCommandPlugin(Star):
         except Exception as e:
             logger.error(f"白名单保存失败: {str(e)}")
 
-    def _get_sender_id(self, event: AstrMessageEvent) -> str | None:
-        """尽量兼容地获取发送者ID，失败返回None"""
-        # 常见字段
-        for attr in ("user_id", "uid", "sender_id"):
-            v = getattr(event, attr, None)
-            if v is not None:
-                return str(v)
-        # 可能的嵌套结构
-        try:
-            return str(event.user.id)
-        except Exception:
-            pass
-        try:
-            return str(event.sender.id)
-        except Exception:
-            pass
-        return None
-
     def _parse_list_input(self, raw: str) -> list:
         """
         将用户传入的“数组”解析为列表。
