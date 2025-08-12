@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.9", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.10", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -335,14 +335,82 @@ class CustomCommandPlugin(Star):
         # 否则回退到默认信息
         yield event.plain_result(msg)
 
+    def _get_event_text(self, event) -> str:
+        """尽量从不同类型的 event/Context 中提取文本消息，兼容 message_str / get_message_str 等。"""
+        # 1) 直接属性或可调用属性 message_str
+        try:
+            v = getattr(event, "message_str", None)
+            if callable(v):
+                v = v()
+            if isinstance(v, str):
+                return v
+        except Exception:
+            pass
+
+        # 2) 常见的取文本方法/属性
+        for name in ("get_message_str", "get_message_text", "get_text", "text"):
+            try:
+                attr = getattr(event, name, None)
+                val = attr() if callable(attr) else attr
+                if isinstance(val, str):
+                    return val
+            except Exception:
+                continue
+
+        # 3) event.message 以及其 text 字段
+        try:
+            msg = getattr(event, "message", None)
+            if isinstance(msg, str):
+                return msg
+            if hasattr(msg, "text"):
+                t = msg.text
+                if isinstance(t, str):
+                    return t
+        except Exception:
+            pass
+
+        return ""
+
+    def _get_sender_id(self, event):
+        """兼容不同 event/Context 的取发送者ID方法。"""
+        # 优先使用统一方法
+        try:
+            fn = getattr(event, "get_sender_id", None)
+            if callable(fn):
+                return fn()
+        except Exception:
+            pass
+
+        # 常见属性名尝试
+        for name in ("sender_id", "user_id", "uid"):
+            try:
+                v = getattr(event, name, None)
+                if v is not None:
+                    return v
+            except Exception:
+                continue
+
+        # 兼容 sender 对象
+        try:
+            sender = getattr(event, "sender", None)
+            if sender is not None:
+                for n in ("id", "user_id", "uid"):
+                    if hasattr(sender, n):
+                        return getattr(sender, n)
+        except Exception:
+            pass
+
+        return None
+
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
-        msg = event.message_str.strip().lower()
+        raw = self._get_event_text(event)
+        msg = (raw or "").strip().lower()
         print(f"[DEBUG] 收到消息: {msg}")
         # 白名单校验：仅当开启时才限制自动回复
         if self.whitelist_enabled:
             print(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
-            sid = event.get_sender_id()
+            sid = self._get_sender_id(event)
             print(f"[DEBUG] 发送: {sid}")
             if sid is None or str(sid) not in self.whitelist:
                 print(f"[DEBUG] 发送者不在白名单内，忽略消息")
