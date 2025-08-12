@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.8", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.9", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -138,9 +138,9 @@ class CustomCommandPlugin(Star):
             return v
 
     def _request_api(self, method: str, endpoint: str, payload: dict | None = None):
-        """统一的HTTP请求方法，返回 (ok: bool, message: str)"""
+        """统一的HTTP请求方法，返回 (ok: bool, message: str, status_code: int|None)"""
         if not self.api_token:
-            return False, "❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。"
+            return False, "❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。", None
 
         headers = {
             "Authorization": f"Bearer {self.api_token}",
@@ -155,11 +155,23 @@ class CustomCommandPlugin(Star):
             response.raise_for_status()
             try:
                 result = response.json()
-                return True, f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+                return True, f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}", response.status_code
             except Exception:
-                return True, f"API响应（文本）：\n{response.text}"
+                return True, f"API响应（文本）：\n{response.text}", response.status_code
+        except requests.HTTPError as e:
+            # 仍然返回HTTP状态码以供上层做自定义映射
+            status = getattr(e.response, 'status_code', None)
+            text = None
+            try:
+                text = e.response.text if e.response is not None else None
+            except Exception:
+                pass
+            msg = f"❌ 调用{method.upper()} API失败: {str(e)}"
+            if text:
+                msg += f"\n响应体：\n{text}"
+            return False, msg, status
         except Exception as e:
-            return False, f"❌ 调用{method.upper()} API失败: {str(e)}"
+            return False, f"❌ 调用{method.upper()} API失败: {str(e)}", None
 
     @command("添加自定义回复")
     @permission_type(PermissionType.ADMIN)
@@ -267,18 +279,16 @@ class CustomCommandPlugin(Star):
         key = keyword.strip().lower()
         self.command_map[key] = {"type": "get_api", "endpoint": endpoint}
         self._save_config(self.command_map)
-        ok, msg = self._request_api("GET", endpoint)
-        if ok:
-            yield event.plain_result(msg)
-        else:
-            yield event.plain_result(msg)
+        ok, msg, _status = self._request_api("GET", endpoint)
+        yield event.plain_result(msg)
 
     @command("调用POSTAPI")
-    async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, data_keys: str = "[]", data_values: str = "[]"):
-        """/调用POSTAPI 关键词 接口地址 数据键名[] 数据值[]"""
+    async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, data_keys: str = "[]", data_values: str = "[]", resp_codes: str = "[]", resp_texts: str = "[]"):
+        """/调用POSTAPI 关键词 接口地址 数据键名[] 数据值[] 响应代码[] 对应响应代码回复[]"""
         # 保存关键词与接口地址的映射
         key = keyword.strip().lower()
-        self.command_map[key] = {"type": "post_api", "endpoint": endpoint, "payload": None}
+        # 先占位保存（payload/code_map 稍后填充）
+        self.command_map[key] = {"type": "post_api", "endpoint": endpoint, "payload": None, "code_map": None}
         self._save_config(self.command_map)
         if not self.api_token:
             yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
@@ -291,15 +301,39 @@ class CustomCommandPlugin(Star):
             yield event.plain_result(f"❌ 数据键名与数据值数量不一致：{len(keys)} != {len(values)}")
             return
         payload = {str(k): self._auto_cast(v) for k, v in zip(keys, values)}
-        # 记录最近一次的payload，便于下次仅输入关键词也能调用
+
+        # 解析自定义响应代码与对应回复
+        code_list = self._parse_list_input(resp_codes)
+        text_list = self._parse_list_input(resp_texts)
+        code_map = None
+        if code_list or text_list:
+            if len(code_list) != len(text_list):
+                yield event.plain_result(f"❌ 响应代码与对应回复数量不一致：{len(code_list)} != {len(text_list)}")
+                return
+            # 将代码转为 int，无法转换的跳过
+            tmp_map = {}
+            for c, t in zip(code_list, text_list):
+                c_val = self._auto_cast(c)
+                try:
+                    c_int = int(c_val)
+                    tmp_map[c_int] = str(t)
+                except Exception:
+                    # 忽略无法转换为整数的代码
+                    continue
+            code_map = tmp_map if tmp_map else None
+
+        # 持久化 payload 和 code_map
         self.command_map[key]["payload"] = payload
+        self.command_map[key]["code_map"] = code_map
         self._save_config(self.command_map)
 
-        ok, msg = self._request_api("POST", endpoint, payload)
-        if ok:
-            yield event.plain_result(msg)
-        else:
-            yield event.plain_result(msg)
+        ok, msg, status = self._request_api("POST", endpoint, payload)
+        # 若命中自定义代码映射，则直接使用对应回复
+        if status is not None and code_map and status in code_map:
+            yield event.plain_result(code_map[status])
+            return
+        # 否则回退到默认信息
+        yield event.plain_result(msg)
 
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
@@ -332,13 +366,21 @@ class CustomCommandPlugin(Star):
             vtype = v.get("type")
             if vtype == "get_api":
                 print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
-                ok, out = self._request_api("GET", v.get("endpoint", ""))
+                ok, out, _status = self._request_api("GET", v.get("endpoint", ""))
                 yield event.plain_result(out)
                 return
             if vtype == "post_api":
                 print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
-                ok, out = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
-                yield event.plain_result(out)
+                ok, out, status = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
+                code_map = v.get("code_map") or {}
+                try:
+                    status_int = int(status) if status is not None else None
+                except Exception:
+                    status_int = None
+                if status_int is not None and status_int in code_map:
+                    yield event.plain_result(code_map[status_int])
+                else:
+                    yield event.plain_result(out)
                 return
             # 未知类型，回退为文本
             yield event.plain_result(str(v))
