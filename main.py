@@ -326,7 +326,7 @@ class CustomCommandPlugin(Star):
         # 白名单校验：仅当开启时才限制自动回复
         if self.whitelist_enabled:
             print(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
-            sid = self._get_sender_id(event)
+            sid = event.get_sender_id()
             print(f"[DEBUG] 发送者ID: {sid}")
             if sid is None or str(sid) not in self.whitelist:
                 print(f"[DEBUG] 发送者不在白名单内，忽略消息")
