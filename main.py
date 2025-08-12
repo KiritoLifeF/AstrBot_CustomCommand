@@ -34,12 +34,28 @@ class CustomCommandPlugin(Star):
         self.whitelist = self._load_whitelist()
 
     def _load_config(self) -> dict:
-        """加载本地配置文件"""
+        """加载本地配置文件，并修正 JSON 导致的 key 类型问题（如 code_map 的整型被转成字符串）。"""
         try:
             if not os.path.exists(self.config_path):
                 return {}
             with open(self.config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+
+            # 兼容：把 post_api 的 code_map 的键从 str 恢复为 int
+            if isinstance(data, dict):
+                for _, v in data.items():
+                    if isinstance(v, dict) and v.get("type") == "post_api":
+                        cmap = v.get("code_map")
+                        if isinstance(cmap, dict):
+                            fixed = {}
+                            for kk, vv in cmap.items():
+                                try:
+                                    fixed[int(kk)] = vv
+                                except Exception:
+                                    # 无法转为 int 的键保持原样
+                                    fixed[kk] = vv
+                            v["code_map"] = fixed
+            return data
         except Exception as e:
             logger.error(f"配置加载失败: {str(e)}")
             return {}
