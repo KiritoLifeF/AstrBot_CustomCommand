@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.1", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.2", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -19,6 +19,11 @@ class CustomCommandPlugin(Star):
         self.command_map = self._load_config()
         self.api_token = self._load_token()
         logger.info(f"配置文件路径：{self.config_path}")
+        # 白名单配置
+        self.plugin_data_dir = os.path.join("data", "plugins", "astrbot_plugin_custom_command")
+        self.whitelist_path = os.path.join(self.plugin_data_dir, "whitelist.json")
+        self.whitelist_enabled = True  # 默认开启白名单策略
+        self.whitelist = self._load_whitelist()
 
     def _load_config(self) -> dict:
         """加载本地配置文件"""
@@ -65,6 +70,46 @@ class CustomCommandPlugin(Star):
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
+    def _load_whitelist(self) -> set:
+        """加载白名单，存为字符串集合"""
+        try:
+            if not os.path.exists(self.whitelist_path):
+                return set()
+            with open(self.whitelist_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 存为字符串集合，避免类型不一致
+                return set(str(x) for x in data.get("ids", []))
+        except Exception as e:
+            logger.error(f"白名单加载失败: {str(e)}")
+            return set()
+
+    def _save_whitelist(self):
+        """保存白名单到文件"""
+        try:
+            os.makedirs(self.plugin_data_dir, exist_ok=True)
+            with open(self.whitelist_path, "w", encoding="utf-8") as f:
+                json.dump({"ids": sorted(self.whitelist)}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"白名单保存失败: {str(e)}")
+
+    def _get_sender_id(self, event: AstrMessageEvent) -> str | None:
+        """尽量兼容地获取发送者ID，失败返回None"""
+        # 常见字段
+        for attr in ("user_id", "uid", "sender_id"):
+            v = getattr(event, attr, None)
+            if v is not None:
+                return str(v)
+        # 可能的嵌套结构
+        try:
+            return str(event.user.id)
+        except Exception:
+            pass
+        try:
+            return str(event.sender.id)
+        except Exception:
+            pass
+        return None
+
     def _parse_list_input(self, raw: str) -> list:
         """
         将用户传入的“数组”解析为列表。
@@ -102,6 +147,30 @@ class CustomCommandPlugin(Star):
         except Exception:
             return v
 
+    def _request_api(self, method: str, endpoint: str, payload: dict | None = None):
+        """统一的HTTP请求方法，返回 (ok: bool, message: str)"""
+        if not self.api_token:
+            return False, "❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            'Accept': 'Application/vnd.pterodactyl.v1+json',
+            'Content-Type': 'application/json'
+        }
+        try:
+            if method.upper() == "GET":
+                response = requests.get(endpoint, headers=headers, timeout=10)
+            else:
+                response = requests.post(endpoint, headers=headers, json=(payload or {}), timeout=10)
+            response.raise_for_status()
+            try:
+                result = response.json()
+                return True, f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+            except Exception:
+                return True, f"API响应（文本）：\n{response.text}"
+        except Exception as e:
+            return False, f"❌ 调用{method.upper()} API失败: {str(e)}"
+
     @command("添加自定义回复")
     @permission_type(PermissionType.ADMIN)
     async def add_reply(self, event: AstrMessageEvent, keyword: str, reply: str):
@@ -116,9 +185,20 @@ class CustomCommandPlugin(Star):
         if not self.command_map:
             yield event.plain_result("暂无自定义回复")
             return
-        msg = "当前关键词回复列表：\n" + "\n".join(
-            [f"{i+1}. [{k}] -> {v}" for i, (k, v) in enumerate(self.command_map.items())]
-        )
+        lines = []
+        for i, (k, v) in enumerate(self.command_map.items()):
+            if isinstance(v, dict):
+                if v.get("type") == "get_api":
+                    lines.append(f"{i+1}. [GET] {k} -> {v.get('endpoint','')}")
+                elif v.get("type") == "post_api":
+                    ep = v.get('endpoint','')
+                    payload = v.get('payload', {})
+                    lines.append(f"{i+1}. [POST] {k} -> {ep}  payload={json.dumps(payload, ensure_ascii=False)}")
+                else:
+                    lines.append(f"{i+1}. [未知类型] {k} -> {v}")
+            else:
+                lines.append(f"{i+1}. [文本] {k} -> {v}")
+        msg = "当前关键词回复列表：\n" + "\n".join(lines)
         yield event.plain_result(msg)
 
     @command("删除自定义回复")
@@ -133,6 +213,55 @@ class CustomCommandPlugin(Star):
         self._save_config(self.command_map)
         yield event.plain_result(f"✅ 已删除关键词：{keyword}")
 
+    @command("添加白名单")
+    @permission_type(PermissionType.ADMIN)
+    async def add_whitelist(self, event: AstrMessageEvent, user_id: str):
+        """/添加白名单 用户ID"""
+        uid = str(user_id).strip()
+        if not uid:
+            yield event.plain_result("❌ 用户ID不能为空")
+            return
+        self.whitelist.add(uid)
+        self._save_whitelist()
+        yield event.plain_result(f"✅ 已加入白名单：{uid}")
+
+    @command("删除白名单")
+    @permission_type(PermissionType.ADMIN)
+    async def remove_whitelist(self, event: AstrMessageEvent, user_id: str):
+        """/删除白名单 用户ID"""
+        uid = str(user_id).strip()
+        if uid in self.whitelist:
+            self.whitelist.remove(uid)
+            self._save_whitelist()
+            yield event.plain_result(f"✅ 已从白名单移除：{uid}")
+        else:
+            yield event.plain_result(f"ℹ️ 白名单中不存在：{uid}")
+
+    @command("查看白名单")
+    @permission_type(PermissionType.ADMIN)
+    async def list_whitelist(self, event: AstrMessageEvent):
+        """查看白名单列表"""
+        if not self.whitelist:
+            yield event.plain_result("白名单为空")
+            return
+        ids = "\n".join(sorted(self.whitelist))
+        status = "开启" if self.whitelist_enabled else "关闭"
+        yield event.plain_result(f"白名单（{status}）列表：\n{ids}")
+
+    @command("白名单开关")
+    @permission_type(PermissionType.ADMIN)
+    async def toggle_whitelist(self, event: AstrMessageEvent, on_off: str = "开"):
+        """/白名单开关 开|关（默认开）"""
+        flag = str(on_off).strip().lower()
+        if flag in ("开", "on", "true", "1"):
+            self.whitelist_enabled = True
+        elif flag in ("关", "off", "false", "0"):
+            self.whitelist_enabled = False
+        else:
+            yield event.plain_result("❌ 参数仅支持：开/关")
+            return
+        yield event.plain_result(f"✅ 白名单已{'开启' if self.whitelist_enabled else '关闭'}")
+
     @command("设置API令牌")
     @permission_type(PermissionType.ADMIN)
     async def set_api_token(self, event: AstrMessageEvent, token: str):
@@ -146,33 +275,20 @@ class CustomCommandPlugin(Star):
         """/调用API 关键词 接口地址"""
         # 保存关键词与接口地址的映射
         key = keyword.strip().lower()
-        self.command_map[key] = endpoint
+        self.command_map[key] = {"type": "get_api", "endpoint": endpoint}
         self._save_config(self.command_map)
-        if not self.api_token:
-            yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
-            return
-        headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            'Accept': 'Application/vnd.pterodactyl.v1+json',
-            'Content-Type': 'application/json'
-            }
-        try:
-            response = requests.get(endpoint, headers=headers, timeout=10)
-            response.raise_for_status()
-            try:
-                result = response.json()
-                yield event.plain_result(f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}")
-            except Exception:
-                yield event.plain_result(f"API响应（文本）：\n{response.text}")
-        except Exception as e:
-            yield event.plain_result(f"❌ 调用API失败: {str(e)}")
+        ok, msg = self._request_api("GET", endpoint)
+        if ok:
+            yield event.plain_result(msg)
+        else:
+            yield event.plain_result(msg)
 
     @command("调用POSTAPI")
     async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, data_keys: str = "[]", data_values: str = "[]"):
         """/调用POSTAPI 关键词 接口地址 数据键名[] 数据值[]"""
         # 保存关键词与接口地址的映射
         key = keyword.strip().lower()
-        self.command_map[key] = endpoint
+        self.command_map[key] = {"type": "post_api", "endpoint": endpoint, "payload": None}
         self._save_config(self.command_map)
         if not self.api_token:
             yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
@@ -185,30 +301,53 @@ class CustomCommandPlugin(Star):
             yield event.plain_result(f"❌ 数据键名与数据值数量不一致：{len(keys)} != {len(values)}")
             return
         payload = {str(k): self._auto_cast(v) for k, v in zip(keys, values)}
+        # 记录最近一次的payload，便于下次仅输入关键词也能调用
+        self.command_map[key]["payload"] = payload
+        self._save_config(self.command_map)
 
-        headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            'Accept': 'Application/vnd.pterodactyl.v1+json',
-            'Content-Type': 'application/json'
-        }
-        try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
-            response.raise_for_status()
-            try:
-                result = response.json()
-                yield event.plain_result(f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}")
-            except Exception:
-                yield event.plain_result(f"API响应（文本）：\n{response.text}")
-        except Exception as e:
-            yield event.plain_result(f"❌ 调用POST API失败: {str(e)}")
+        ok, msg = self._request_api("POST", endpoint, payload)
+        if ok:
+            yield event.plain_result(msg)
+        else:
+            yield event.plain_result(msg)
 
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
         msg = event.message_str.strip().lower()
-        if reply := self.command_map.get(msg):
-            yield event.plain_result(reply)
-            return
-        for keyword, reply in self.command_map.items():
-            if keyword in msg:
-                yield event.plain_result(reply)
+        # 白名单校验：仅当开启时才限制自动回复
+        if self.whitelist_enabled:
+            sid = self._get_sender_id(event)
+            if sid is None or str(sid) not in self.whitelist:
+                # 不在白名单则直接忽略，不打扰用户
                 return
+        v = self.command_map.get(msg)
+        if v is None:
+            # 模糊匹配文本回复（兼容旧逻辑）
+            for keyword, reply in self.command_map.items():
+                if isinstance(reply, str) and keyword in msg:
+                    yield event.plain_result(reply)
+                    return
+            return
+
+        # 命中精确关键词
+        if isinstance(v, dict):
+            vtype = v.get("type")
+            if vtype == "get_api":
+                ok, out = self._request_api("GET", v.get("endpoint", ""))
+                yield event.plain_result(out)
+                return
+            if vtype == "post_api":
+                ok, out = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
+                yield event.plain_result(out)
+                return
+            # 未知类型，回退为文本
+            yield event.plain_result(str(v))
+            return
+
+        # 兼容旧版：纯文本回复
+        if isinstance(v, str):
+            yield event.plain_result(v)
+            return
+
+        # 其他类型（理论不存在）
+        yield event.plain_result(str(v))
