@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.0", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.1", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -65,6 +65,43 @@ class CustomCommandPlugin(Star):
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
+    def _parse_list_input(self, raw: str) -> list:
+        """
+        将用户传入的“数组”解析为列表。
+        支持两种形式：
+        1) JSON 数组：如 '["a","b"]' 或 '[1,true]'
+        2) 逗号分隔：如 'a,b,c' （会按字符串处理）
+        空字符串或 '[]' 视为 []
+        """
+        if raw is None:
+            return []
+        s = str(raw).strip()
+        if s == "" or s == "[]":
+            return []
+        # 优先尝试 JSON
+        try:
+            data = json.loads(s)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+        # 回退为逗号分隔
+        parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+        return parts
+
+    def _auto_cast(self, v):
+        """
+        对值做一次 JSON 反序列化尝试，能转成数字/布尔/null 就转，失败则原样字符串。
+        """
+        if isinstance(v, (int, float, bool)) or v is None:
+            return v
+        if not isinstance(v, str):
+            return v
+        try:
+            return json.loads(v)
+        except Exception:
+            return v
+
     @command("添加自定义回复")
     @permission_type(PermissionType.ADMIN)
     async def add_reply(self, event: AstrMessageEvent, keyword: str, reply: str):
@@ -114,7 +151,11 @@ class CustomCommandPlugin(Star):
         if not self.api_token:
             yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
             return
-        headers = {"Authorization": f"Bearer {self.api_token}"}
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            'Accept': 'Application/vnd.pterodactyl.v1+json',
+            'Content-Type': 'application/json'
+            }
         try:
             response = requests.get(endpoint, headers=headers, timeout=10)
             response.raise_for_status()
@@ -125,6 +166,41 @@ class CustomCommandPlugin(Star):
                 yield event.plain_result(f"API响应（文本）：\n{response.text}")
         except Exception as e:
             yield event.plain_result(f"❌ 调用API失败: {str(e)}")
+
+    @command("调用POSTAPI")
+    async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, data_keys: str = "[]", data_values: str = "[]"):
+        """/调用POSTAPI 关键词 接口地址 数据键名[] 数据值[]"""
+        # 保存关键词与接口地址的映射
+        key = keyword.strip().lower()
+        self.command_map[key] = endpoint
+        self._save_config(self.command_map)
+        if not self.api_token:
+            yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
+            return
+
+        # 解析数据键名与数据值
+        keys = self._parse_list_input(data_keys)
+        values = self._parse_list_input(data_values)
+        if len(keys) != len(values):
+            yield event.plain_result(f"❌ 数据键名与数据值数量不一致：{len(keys)} != {len(values)}")
+            return
+        payload = {str(k): self._auto_cast(v) for k, v in zip(keys, values)}
+
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            'Accept': 'Application/vnd.pterodactyl.v1+json',
+            'Content-Type': 'application/json'
+        }
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()
+            try:
+                result = response.json()
+                yield event.plain_result(f"API响应（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}")
+            except Exception:
+                yield event.plain_result(f"API响应（文本）：\n{response.text}")
+        except Exception as e:
+            yield event.plain_result(f"❌ 调用POST API失败: {str(e)}")
 
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
