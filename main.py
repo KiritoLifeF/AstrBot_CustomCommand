@@ -18,7 +18,7 @@ class CustomCommandPlugin(Star):
         self.config_path = os.path.join(plugin_data_dir, "custom_command_config.json")
         self.command_map = self._load_config()
         self.api_token = self._load_token()
-        logger.info(f"配置文件路径：{self.config_path}")
+        logger.debug(f"配置文件路径：{self.config_path}")
         # 白名单配置
         self.plugin_data_dir = os.path.join("data", "plugins", "astrbot_plugin_custom_command")
         self.whitelist_path = os.path.join(self.plugin_data_dir, "whitelist.json")
@@ -49,12 +49,12 @@ class CustomCommandPlugin(Star):
         token_path = os.path.join("data", "plugins", "astrbot_plugin_custom_command", "api_token.json")
         try:
             if not os.path.exists(token_path):
-                logger.info("API令牌文件不存在，返回空字符串")
+                logger.debug("API令牌文件不存在，返回空字符串")
                 return ""
             with open(token_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 token = data.get("token", "")
-                logger.info("API令牌加载成功")
+                logger.debug("API令牌加载成功")
                 return token
         except Exception as e:
             logger.error(f"API令牌加载失败: {str(e)}")
@@ -66,7 +66,7 @@ class CustomCommandPlugin(Star):
         try:
             with open(token_path, "w", encoding="utf-8") as f:
                 json.dump({"token": token}, f, ensure_ascii=False, indent=2)
-            logger.info("API令牌保存成功")
+            logger.debug("API令牌保存成功")
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
@@ -314,39 +314,39 @@ class CustomCommandPlugin(Star):
     @event_message_type(EventMessageType.ALL)
     async def handle_message(self, event: AstrMessageEvent):
         msg = event.message_str.strip().lower()
-        logger.info(f"[DEBUG] 收到消息: {msg}")
+        logger.debug(f"[DEBUG] 收到消息: {msg}")
         # 白名单校验：仅当开启时才限制自动回复
         if self.whitelist_enabled:
-            logger.info(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
+            logger.debug(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
             sid = self._get_sender_id(event)
-            logger.info(f"[DEBUG] 发送者ID: {sid}")
+            logger.debug(f"[DEBUG] 发送者ID: {sid}")
             if sid is None or str(sid) not in self.whitelist:
-                logger.info(f"[DEBUG] 发送者不在白名单内，忽略消息")
+                logger.debug(f"[DEBUG] 发送者不在白名单内，忽略消息")
                 # 不在白名单则直接忽略，不打扰用户
                 return
         v = self.command_map.get(msg)
-        logger.info(f"[DEBUG] 匹配到的关键词映射: {v}")
+        logger.debug(f"[DEBUG] 匹配到的关键词映射: {v}")
         if v is None:
-            logger.info(f"[DEBUG] 尝试模糊匹配...")
+            logger.debug(f"[DEBUG] 尝试模糊匹配...")
             # 模糊匹配文本回复（兼容旧逻辑）
             for keyword, reply in self.command_map.items():
                 if isinstance(reply, str) and keyword in msg:
-                    logger.info(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
+                    logger.debug(f"[DEBUG] 模糊匹配成功: {keyword} -> {reply}")
                     yield event.plain_result(reply)
                     return
             return
 
         # 命中精确关键词，类型: {type(v)}
-        logger.info(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
+        logger.debug(f"[DEBUG] 命中精确关键词，类型: {type(v)}")
         if isinstance(v, dict):
             vtype = v.get("type")
             if vtype == "get_api":
-                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                logger.debug(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("GET", v.get("endpoint", ""))
                 yield event.plain_result(out)
                 return
             if vtype == "post_api":
-                logger.info(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
+                logger.debug(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
                 ok, out = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
                 yield event.plain_result(out)
                 return
@@ -356,7 +356,7 @@ class CustomCommandPlugin(Star):
 
         # 兼容旧版：纯文本回复
         if isinstance(v, str):
-            logger.info(f"[DEBUG] 返回纯文本回复: {v}")
+            logger.debug(f"[DEBUG] 返回纯文本回复: {v}")
             yield event.plain_result(v)
             return
 
