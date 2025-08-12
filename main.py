@@ -309,7 +309,7 @@ class CustomCommandPlugin(Star):
         if self.whitelist_enabled:
             print(f"[DEBUG] 白名单已开启，正在检查发送者ID...")
             sid = event.get_sender_id()
-            print(f"[DEBUG] 发送者ID: {sid}")
+            print(f"[DEBUG] 发送: {event}")
             if sid is None or str(sid) not in self.whitelist:
                 print(f"[DEBUG] 发送者不在白名单内，忽略消息")
                 # 不在白名单则直接忽略，不打扰用户
