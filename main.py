@@ -11,6 +11,14 @@ logger = logging.getLogger("CustomCommandPlugin")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        # 确保插件日志能在控制台输出（即使宿主已配置 logging）
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            _handler = logging.StreamHandler()
+            _handler.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s"))
+            logger.addHandler(_handler)
+        # 为避免重复输出，保持向上冒泡为 False（因为我们自己加了 handler）
+        logger.propagate = False
 
         # 修复：手动创建插件数据目录
         plugin_data_dir = os.path.join("data", "plugins", "astrbot_plugin_custom_command")
@@ -18,7 +26,7 @@ class CustomCommandPlugin(Star):
         self.config_path = os.path.join(plugin_data_dir, "custom_command_config.json")
         self.command_map = self._load_config()
         self.api_token = self._load_token()
-        logger.debug(f"配置文件路径：{self.config_path}")
+        logger.info(f"配置文件路径：{self.config_path}")
         # 白名单配置
         self.plugin_data_dir = os.path.join("data", "plugins", "astrbot_plugin_custom_command")
         self.whitelist_path = os.path.join(self.plugin_data_dir, "whitelist.json")
@@ -49,12 +57,12 @@ class CustomCommandPlugin(Star):
         token_path = os.path.join("data", "plugins", "astrbot_plugin_custom_command", "api_token.json")
         try:
             if not os.path.exists(token_path):
-                logger.debug("API令牌文件不存在，返回空字符串")
+                logger.info("API令牌文件不存在，返回空字符串")
                 return ""
             with open(token_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 token = data.get("token", "")
-                logger.debug("API令牌加载成功")
+                logger.info("API令牌加载成功")
                 return token
         except Exception as e:
             logger.error(f"API令牌加载失败: {str(e)}")
@@ -66,7 +74,7 @@ class CustomCommandPlugin(Star):
         try:
             with open(token_path, "w", encoding="utf-8") as f:
                 json.dump({"token": token}, f, ensure_ascii=False, indent=2)
-            logger.debug("API令牌保存成功")
+            logger.info("API令牌保存成功")
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
