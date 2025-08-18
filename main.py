@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger("CustomCommandPlugin")
 
-@register("自定义回复插件", "Varrge", "关键词回复插件", "1.0.10", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
+@register("自定义回复插件", "Varrge", "关键词回复插件", "1.1.0", "https://github.com/KiritoLifeF/AstrBot_CustomCommand")
 class CustomCommandPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -32,6 +32,9 @@ class CustomCommandPlugin(Star):
         self.whitelist_path = os.path.join(self.plugin_data_dir, "whitelist.json")
         self.whitelist_enabled = True  # 默认开启白名单策略
         self.whitelist = self._load_whitelist()
+        # 新增：多令牌支持
+        self.tokens_path = os.path.join(plugin_data_dir, "api_tokens.json")
+        self.token_list = self._load_tokens()
 
     def _load_config(self) -> dict:
         """加载本地配置文件，并修正 JSON 导致的 key 类型问题（如 code_map 的整型被转成字符串）。"""
@@ -94,6 +97,40 @@ class CustomCommandPlugin(Star):
         except Exception as e:
             logger.error(f"API令牌保存失败: {str(e)}")
 
+    def _load_tokens(self) -> list[str]:
+        """加载API令牌列表，兼容旧版单令牌文件"""
+        try:
+            # 优先读取新文件
+            if os.path.exists(self.tokens_path):
+                with open(self.tokens_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                lst = data.get("tokens", [])
+                return [str(x) for x in lst if str(x).strip() != ""]
+
+            # 回落：如果旧的单令牌存在，则用作索引0
+            if hasattr(self, "api_token") and self.api_token:
+                return [self.api_token]
+            token_path = os.path.join("data", "plugins", "astrbot_plugin_custom_command", "api_token.json")
+            if os.path.exists(token_path):
+                with open(token_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                tok = data.get("token", "")
+                return [tok] if tok else []
+            return []
+        except Exception as e:
+            logger.error(f"API令牌列表加载失败: {str(e)}")
+            return []
+
+    def _save_tokens(self):
+        """保存API令牌列表到新文件"""
+        try:
+            os.makedirs(os.path.dirname(self.tokens_path), exist_ok=True)
+            with open(self.tokens_path, "w", encoding="utf-8") as f:
+                json.dump({"tokens": self.token_list}, f, ensure_ascii=False, indent=2)
+            logger.info("API令牌列表保存成功")
+        except Exception as e:
+            logger.error(f"API令牌列表保存失败: {str(e)}")
+
     def _load_whitelist(self) -> set:
         """加载白名单，存为字符串集合"""
         try:
@@ -153,13 +190,29 @@ class CustomCommandPlugin(Star):
         except Exception:
             return v
 
-    def _request_api(self, method: str, endpoint: str, payload: dict | None = None):
-        """统一的HTTP请求方法，返回 (ok: bool, message: str, status_code: int|None)"""
-        if not self.api_token:
-            return False, "❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。", None
+    def _request_api(self, method: str, endpoint: str, payload: dict | None = None, token_index: int | None = None):
+        """统一的HTTP请求方法，支持按索引选择令牌。返回 (ok: bool, message: str, status_code: int|None)"""
+        # 选择令牌：优先使用传入索引；否则回退到列表的第0个；再回退到旧版 self.api_token
+        token_to_use = None
+        try:
+            if token_index is not None:
+                if isinstance(token_index, str):
+                    token_index = int(token_index)
+                if 0 <= token_index < len(self.token_list):
+                    token_to_use = self.token_list[token_index]
+        except Exception:
+            pass
+        if token_to_use is None and getattr(self, "token_list", None):
+            if len(self.token_list) > 0:
+                token_to_use = self.token_list[0]
+        if token_to_use is None:
+            token_to_use = self.api_token if getattr(self, "api_token", "") else None
+
+        if not token_to_use:
+            return False, "❌ API令牌未设置，请先使用“/tokenAdd”添加令牌（或 /设置API令牌 兼容旧版）。", None
 
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {token_to_use}",
             'Accept': 'Application/vnd.pterodactyl.v1+json',
             'Content-Type': 'application/json'
         }
@@ -175,7 +228,6 @@ class CustomCommandPlugin(Star):
             except Exception:
                 return True, f"API响应（文本）：\n{response.text}", response.status_code
         except requests.HTTPError as e:
-            # 仍然返回HTTP状态码以供上层做自定义映射
             status = getattr(e.response, 'status_code', None)
             text = None
             try:
@@ -207,13 +259,14 @@ class CustomCommandPlugin(Star):
         for i, (k, v) in enumerate(self.command_map.items()):
             if isinstance(v, dict):
                 if v.get("type") == "get_api":
-                    lines.append(f"{i+1}. [GET] {k} -> {v.get('endpoint','')}")
+                    lines.append(f"{i + 1}. [GET] {k} -> {v.get('endpoint', '')} (token_idx={v.get('token_index', 0)})")
                 elif v.get("type") == "post_api":
-                    ep = v.get('endpoint','')
+                    ep = v.get('endpoint', '')
                     payload = v.get('payload', {})
-                    lines.append(f"{i+1}. [POST] {k} -> {ep}  payload={json.dumps(payload, ensure_ascii=False)}")
+                    lines.append(
+                        f"{i + 1}. [POST] {k} -> {ep}  payload={json.dumps(payload, ensure_ascii=False)} (token_idx={v.get('token_index', 0)})")
                 else:
-                    lines.append(f"{i+1}. [未知类型] {k} -> {v}")
+                    lines.append(f"{i + 1}. [未知类型] {k} -> {v}")
             else:
                 lines.append(f"{i+1}. [文本] {k} -> {v}")
         msg = "当前关键词回复列表：\n" + "\n".join(lines)
@@ -283,32 +336,116 @@ class CustomCommandPlugin(Star):
     @command("设置API令牌")
     @permission_type(PermissionType.ADMIN)
     async def set_api_token(self, event: AstrMessageEvent, token: str):
-        """/设置API令牌 令牌"""
+        """/设置API令牌 令牌（兼容旧版；会追加到令牌列表末尾）"""
         self._save_token(token)
         self.api_token = token
+        # 兼容：同时追加到多令牌列表
+        self.token_list.append(token)
+        self._save_tokens()
         yield event.plain_result("✅ API令牌已设置成功")
 
+    @command("tokenAdd")
+    @permission_type(PermissionType.ADMIN)
+    async def token_add(self, event: AstrMessageEvent, token: str):
+        """/tokenAdd 令牌 —— 将令牌追加到列表末尾"""
+        t = str(token).strip()
+        if not t:
+            yield event.plain_result("❌ 令牌不能为空")
+            return
+        self.token_list.append(t)
+        self._save_tokens()
+        yield event.plain_result(f"✅ 令牌已添加。索引 = {len(self.token_list)-1}")
+
+    @command("tokenDel")
+    @permission_type(PermissionType.ADMIN)
+    async def token_del(self, event: AstrMessageEvent, index: str):
+        """/tokenDel 索引 —— 删除指定索引的令牌（0 开始）"""
+        try:
+            i = int(str(index).strip())
+        except Exception:
+            yield event.plain_result("❌ 索引必须是整数")
+            return
+        if i < 0 or i >= len(self.token_list):
+            yield event.plain_result(f"❌ 索引越界：{i}（当前共有 {len(self.token_list)} 个令牌）")
+            return
+        self.token_list.pop(i)
+        self._save_tokens()
+        yield event.plain_result(f"✅ 已删除索引 {i} 的令牌")
+
+    @command("tokenUpdate")
+    @permission_type(PermissionType.ADMIN)
+    async def token_update(self, event: AstrMessageEvent, index: str, token: str):
+        """/tokenUpdate 索引 新令牌 —— 用新令牌覆盖指定索引"""
+        try:
+            i = int(str(index).strip())
+        except Exception:
+            yield event.plain_result("❌ 索引必须是整数")
+            return
+        if i < 0 or i >= len(self.token_list):
+            yield event.plain_result(f"❌ 索引越界：{i}（当前共有 {len(self.token_list)} 个令牌）")
+            return
+        t = str(token).strip()
+        if not t:
+            yield event.plain_result("❌ 新令牌不能为空")
+            return
+        self.token_list[i] = t
+        self._save_tokens()
+        yield event.plain_result(f"✅ 已更新索引 {i} 的令牌")
+
+    @command("tokenList")
+    @permission_type(PermissionType.ADMIN)
+    async def token_list(self, event: AstrMessageEvent):
+        """查看令牌列表及索引（脱敏显示）"""
+        if not getattr(self, "token_list", None):
+            yield event.plain_result("当前没有任何令牌。请使用 /tokenAdd 添加。")
+            return
+        lines = []
+        for i, tok in enumerate(self.token_list):
+            masked = self._mask_token(tok)
+            lines.append(f"{i}. {masked} (len={len(tok)})")
+        msg = "令牌列表（索引从 0 开始）：\n" + "\n".join(lines)
+        yield event.plain_result(msg)
+
+    def _mask_token(self, tok: str) -> str:
+        """对令牌做脱敏展示：保留前4后4，其余以*代替。"""
+        if not isinstance(tok, str):
+            tok = str(tok)
+        n = len(tok)
+        if n <= 8:
+            return "*" * n
+        return f"{tok[:4]}{'*' * (n - 8)}{tok[-4:]}"
+
     @command("调用API")
-    async def call_api(self, event: AstrMessageEvent, keyword: str, endpoint: str):
-        """/调用API 关键词 接口地址"""
-        # 保存关键词与接口地址的映射
+    async def call_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, api_index: str):
+        """/调用API 关键词 接口地址 API列表索引"""
+        # 保存关键词与接口地址及令牌索引
         key = keyword.strip().lower()
-        self.command_map[key] = {"type": "get_api", "endpoint": endpoint}
+        try:
+            idx = int(str(api_index).strip())
+        except Exception:
+            yield event.plain_result("❌ API列表索引必须是整数")
+            return
+        self.command_map[key] = {"type": "get_api", "endpoint": endpoint, "token_index": idx}
         self._save_config(self.command_map)
-        ok, msg, _status = self._request_api("GET", endpoint)
+        ok, msg, _status = self._request_api("GET", endpoint, token_index=idx)
         yield event.plain_result(msg)
 
     @command("调用POSTAPI")
-    async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, data_keys: str = "[]", data_values: str = "[]", resp_codes: str = "[]", resp_texts: str = "[]"):
-        """/调用POSTAPI 关键词 接口地址 数据键名[] 数据值[] 响应代码[] 对应响应代码回复[]"""
-        # 保存关键词与接口地址的映射
+    async def call_post_api(self, event: AstrMessageEvent, keyword: str, endpoint: str, api_index: str,
+                            data_keys: str = "[]", data_values: str = "[]", resp_codes: str = "[]",
+                            resp_texts: str = "[]"):
+        """/调用POSTAPI 关键词 接口地址 API列表索引 数据键名[] 数据值[] 响应代码[] 对应响应代码回复[]"""
+        # 保存关键词与接口地址（payload / code_map 稍后填充）
         key = keyword.strip().lower()
-        # 先占位保存（payload/code_map 稍后填充）
-        self.command_map[key] = {"type": "post_api", "endpoint": endpoint, "payload": None, "code_map": None}
-        self._save_config(self.command_map)
-        if not self.api_token:
-            yield event.plain_result("❌ API令牌未设置，请先使用“设置API令牌”命令设置令牌。")
+        try:
+            idx = int(str(api_index).strip())
+        except Exception:
+            yield event.plain_result("❌ API列表索引必须是整数")
             return
+
+        self.command_map[key] = {"type": "post_api", "endpoint": endpoint, "payload": None, "code_map": None,
+                                 "token_index": idx}
+        self._save_config(self.command_map)
 
         # 解析数据键名与数据值
         keys = self._parse_list_input(data_keys)
@@ -326,7 +463,6 @@ class CustomCommandPlugin(Star):
             if len(code_list) != len(text_list):
                 yield event.plain_result(f"❌ 响应代码与对应回复数量不一致：{len(code_list)} != {len(text_list)}")
                 return
-            # 将代码转为 int，无法转换的跳过
             tmp_map = {}
             for c, t in zip(code_list, text_list):
                 c_val = self._auto_cast(c)
@@ -334,7 +470,6 @@ class CustomCommandPlugin(Star):
                     c_int = int(c_val)
                     tmp_map[c_int] = str(t)
                 except Exception:
-                    # 忽略无法转换为整数的代码
                     continue
             code_map = tmp_map if tmp_map else None
 
@@ -343,12 +478,10 @@ class CustomCommandPlugin(Star):
         self.command_map[key]["code_map"] = code_map
         self._save_config(self.command_map)
 
-        ok, msg, status = self._request_api("POST", endpoint, payload)
-        # 若命中自定义代码映射，则直接使用对应回复
+        ok, msg, status = self._request_api("POST", endpoint, payload, token_index=idx)
         if status is not None and code_map and status in code_map:
             yield event.plain_result(code_map[status])
             return
-        # 否则回退到默认信息
         yield event.plain_result(msg)
 
     def _get_event_text(self, event) -> str:
@@ -450,12 +583,12 @@ class CustomCommandPlugin(Star):
             vtype = v.get("type")
             if vtype == "get_api":
                 print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
-                ok, out, _status = self._request_api("GET", v.get("endpoint", ""))
+                ok, out, _status = self._request_api("GET", v.get("endpoint", ""), token_index=v.get("token_index"))
                 yield event.plain_result(out)
                 return
             if vtype == "post_api":
                 print(f"[DEBUG] 调用 {vtype.upper()} 接口: {v.get('endpoint', '')}")
-                ok, out, status = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {})
+                ok, out, status = self._request_api("POST", v.get("endpoint", ""), v.get("payload") or {}, token_index=v.get("token_index"))
                 code_map = v.get("code_map") or {}
                 try:
                     status_int = int(status) if status is not None else None
